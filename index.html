@@ -57,11 +57,26 @@ function grp(d){return d.groupe=='club'?'club':'autre'}
 function byGroup(a,b){return (grp(a)=='club'?0:1)-(grp(b)=='club'?0:1)||byName(a,b)}
 function destOpts(){var o=function(g){return S.dest.filter(function(d){return grp(d)==g}).map(function(d){return '<option value="'+esc(d.id)+'"'+(F.dest==d.id?' selected':'')+'>'+esc(d.name)+'</option>'}).join('')};return '<optgroup label="Clubs">'+o('club')+'</optgroup><optgroup label="Autres">'+o('autre')+'</optgroup>'}
 function b64blob(b){var s=atob(b),a=new Uint8Array(s.length);for(var i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return new Blob([a],{type:'application/pdf'})}
+function openDB(){return new Promise(function(res,rej){var q=indexedDB.open('facturation-v2',1);q.onupgradeneeded=function(){q.result.createObjectStore('kv')};q.onsuccess=function(){res(q.result)};q.onerror=function(){rej(q.error)}})}
+function tx(h,m,f){return new Promise(function(res,rej){var t=h.transaction('kv',m),r=f(t.objectStore('kv'));t.oncomplete=function(){res(r&&r.result)};t.onerror=function(){rej(t.error)};t.onabort=function(){rej(t.error)}})}
+async function localDb(){
+ var h=await openDB();
+ function doc(p){var id=p.split('/').pop();return{id:id,
+  get:function(){return tx(h,'readonly',function(s){return s.get(p)}).then(function(v){return{exists:v!==undefined,id:id,data:function(){return v}}})},
+  set:function(o){return tx(h,'readwrite',function(s){return s.put(o,p)})},
+  delete:function(){return tx(h,'readwrite',function(s){return s.delete(p)})},
+  acquire:function(){return Promise.resolve({acquired:true})}}}
+ function col(n){return{doc:function(id){return doc(n+'/'+id)},
+  add:function(o){return doc(n+'/'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)).set(o)},
+  get:function(){return new Promise(function(res,rej){var t=h.transaction('kv','readonly'),out=[],q=t.objectStore('kv').openCursor(IDBKeyRange.bound(n+'/',n+'/\uffff'));
+   q.onsuccess=function(){var c=q.result;if(c){var v=c.value,k=c.key;out.push({id:k.slice(n.length+1),data:function(){return v}});c.continue()}};
+   t.oncomplete=function(){res({docs:out})};t.onerror=function(){rej(t.error)}})}}}
+ return{doc:function(p){return doc(p)},collection:col}}
 async function init(){
- if(!window.claude||!claude.use){$('app').innerHTML='<div class="card">Cette page doit être ouverte depuis claude.ai.</div>';return}
- db=await claude.use('db');dls=await claude.use('downloads');
- if(!db){$('app').innerHTML='<div class="card"><h2>Base de données indisponible</h2>Ouvrez cette page connecté à votre compte Claude.</div>';return}
- await refresh();render()}
+ try{db=await localDb()}catch(e){$('app').innerHTML='<div class="card"><h2>Stockage indisponible</h2>Ce navigateur bloque l’enregistrement local (navigation privée ?). Utilisez un navigateur classique.</div>';return}
+ dls=(window.claude&&claude.use)?await claude.use('downloads'):null;
+ await refresh();render();
+ if(localData())await importLocal()}
 async function refresh(){
  try{
   var a=await Promise.all([db.collection('destinataires').get(),db.collection('libelles').get(),db.collection('factures').get(),db.doc('meta/compteur').get()]);
